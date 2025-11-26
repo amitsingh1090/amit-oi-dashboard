@@ -24,7 +24,6 @@ st.markdown("<h1>🟢 AMIT'S PRO OI TERMINAL</h1>", unsafe_allow_html=True)
 # Sidebar - Index & Expiry Selector
 st.sidebar.title("⚙️ Controls")
 index = st.sidebar.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
-expiry = st.sidebar.selectbox("Expiry", ["Weekly", "Monthly"])  # Mock, real expiry fetch below
 refresh_sec = st.sidebar.slider("Refresh (sec)", 5, 30, 7)
 
 # Live Tag
@@ -39,21 +38,8 @@ def get_session():
 
 session = get_session()
 
-# Fetch Real Expiries
-@st.cache_data(ttl=300)
-def get_expiries(index):
-    try:
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={index}"
-        data = session.get(url, timeout=15).json()
-        return data["records"]["expiryDates"][:3]  # Top 3 expiries
-    except:
-        return ["27-Nov-2024", "28-Nov-2024", "29-Nov-2024"]  # Fallback
-
-expiries = get_expiries(index)
-expiry = st.sidebar.selectbox("Expiry Date", expiries, index=0)
-
 # Fetch Data Function (TOI & COI Separate)
-def fetch_data(index, expiry):
+def fetch_data(index):
     try:
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={index}"
         json_data = session.get(url, timeout=15).json()
@@ -62,11 +48,8 @@ def fetch_data(index, expiry):
         atm = int(round(price / 50)) * 50
         lot = {"BANKNIFTY": 15, "FINNIFTY": 25}.get(index, 25)
 
-        # Filter for selected expiry (mock filter for now)
-        filtered_records = [item for item in records if expiry in item.get("expiryDate", "")][:20]  # Top strikes
-
         toi_ce = toi_pe = coi_ce = coi_pe = atm_ce = atm_pe = 0
-        for item in filtered_records:
+        for item in records:
             sp = item["strikePrice"]
             if atm - 400 <= sp <= atm + 400:  # Near ATM
                 if "CE" in item:
@@ -99,34 +82,32 @@ def fetch_data(index, expiry):
     except:
         return None
 
-# History
+# History - FIXED: Initialize with all columns to avoid concat error
 if "history" not in st.session_state:
-    st.session_state.history = pd.DataFrame()
+    st.session_state.history = pd.DataFrame(columns=["price", "atm", "toi_ce", "toi_pe", "coi_ce", "coi_pe", "straddle", "pcr", "time"])
 
 ph = st.empty()
 while True:
     with ph.container():
-        data = fetch_data(index, expiry)
+        data = fetch_data(index)
         if not data:
             st.error("Market Closed or Loading...")
             time.sleep(refresh_sec)
             continue
 
-        # Update History
+        # Update History - FIXED: Ensure new_row has all columns
         new_row = pd.DataFrame([data])
         st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
         if len(st.session_state.history) > 100:
             st.session_state.history = st.session_state.history.tail(100)
         df = st.session_state.history
 
-        # Header with Index & Expiry
-        col_h1, col_h2, col_h3 = st.columns([2, 1, 1])
+        # Header with Index
+        col_h1, col_h2 = st.columns([2, 1])
         with col_h1:
-            st.markdown(f"**{index} | {expiry} | ATM: {data['atm']} | Price: ₹{data['price']:,}**")
+            st.markdown(f"**{index} | ATM: {data['atm']} | Price: ₹{data['price']:,}**")
         with col_h2:
             st.metric("PCR", data["pcr"])
-        with col_h3:
-            st.caption(f"Updated: {data['time']}")
 
         # TOI & COI Separate Metrics
         col1, col2, col3, col4 = st.columns(4)
