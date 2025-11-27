@@ -5,134 +5,168 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 
-st.set_page_config(page_title="Amit Pro OI Terminal", layout="wide", page_icon="Chart increasing")
+st.set_page_config(page_title="Amit Pro OI Terminal - TradingTick Style", layout="wide", page_icon="Chart increasing")
 
-# TradingTick Exact Theme
+# TradingTick Exact UI Theme
 st.markdown("""
 <style>
-    .stApp { background: #f8f9fa; font-family: 'Segoe UI', sans-serif; }
-    .header { background: #0d6efd; color: white; padding: 15px; border-radius: 10px; text-align: center; font-size: 2rem; font-weight: bold; }
-    .metric-card { background: white; border: 1px solid #dee2e6; border-radius: 10px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    .stMetric { background: white !important; }
-    .stMetric label { color: #0d6efd !important; font-weight: bold; }
-    .live { color: #dc3545; font-weight: bold; animation: blink 1.5s infinite; }
-    @keyframes blink { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+    .stApp { background: #f8f9fa; }
+    .header { background: #0d6efd; color: white; padding: 20px; border-radius: 12px; text-align: center; font-size: 2.2rem; font-weight: bold; margin-bottom: 20px; }
+    .metric-box { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e0e0e0; }
+    .stMetric label { color: #0d6efd !important; font-weight: bold; font-size: 1rem !important; }
+    .stMetric > div > div { font-size: 1.8rem !important; font-weight: bold; color: #212529 !important; }
+    .live-dot { color: #dc3545; font-size: 2rem; animation: pulse 2s infinite; }
+    @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
 st.markdown('<div class="header">AMIT\'S PRO OI TERMINAL</div>', unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns([1, 2, 1])
+# Controls
+col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
     index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
 with col2:
-    expiry = st.selectbox("Expiry", ["Weekly", "Monthly", "Next Week"])
+    expiry = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"])
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="live">● LIVE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="live-dot">● LIVE</div>', unsafe_allow_html=True)
 
-refresh = st.slider("Refresh (sec)", 5, 30, 10, key="refresh")
+refresh_sec = st.slider("Refresh (seconds)", 5, 20, 8, key="refresh")
 
-# Session
+# NSE Session
 @st.cache_resource(ttl=3600)
 def get_session():
     s = requests.Session()
     s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.nseindia.com/option-chain"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Accept": "application/json"
     })
     s.get("https://www.nseindia.com")
     return s
 
 session = get_session()
 
-def get_data():
+def fetch_data():
     try:
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={index}"
-        data = session.get(url, timeout=10).json()["records"]
+        resp = session.get(url, timeout=10).json()["records"]
         
-        price = data["underlyingValue"]
-        timestamp = data["timestamp"]
+        price = resp["underlyingValue"]
+        timestamp = resp["timestamp"]
         nse_time = datetime.strptime(timestamp, "%d-%b-%Y %H:%M:%S").strftime("%H:%M")
         
-        ce_oi = pe_oi = ce_ch = pe_ch = 0
-        for item in data["data"]:
+        total_ce_oi = total_pe_oi = total_ce_change = total_pe_change = 0
+        for item in resp["data"]:
             if "CE" in item:
-                ce_oi += item["CE"]["openInterest"]
-                ce_ch += item["CE"]["changeinOpenInterest"]
+                total_ce_oi += item["CE"]["openInterest"]
+                total_ce_change += item["CE"]["changeinOpenInterest"]
             if "PE" in item:
-                pe_oi += item["PE"]["openInterest"]
-                pe_ch += item["PE"]["changeinOpenInterest"]
+                total_pe_oi += item["PE"]["openInterest"]
+                total_pe_change += item["PE"]["changeinOpenInterest"]
         
-        lot = 25 if index == "NIFTY" else 15
-        pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
+        lot = 25 if index == "NIFTY" else 15 if index == "BANKNIFTY" else 25
+        pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
         
         return {
             "price": round(price, 2),
-            "ce_oi": round(ce_oi * lot / 100000, 1),
-            "pe_oi": round(pe_oi * lot / 100000, 1),
-            "ce_ch": round(ce_ch * lot / 100000, 1),
-            "pe_ch": round(pe_ch * lot / 100000, 1),
+            "ce_oi": round(total_ce_oi * lot / 100000, 1),
+            "pe_oi": round(total_pe_oi * lot / 100000, 1),
+            "ce_change": round(total_ce_change * lot / 100000, 1),
+            "pe_change": round(total_pe_change * lot / 100000, 1),
             "pcr": pcr,
             "time": nse_time
         }
     except:
         return None
 
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame()
+# Initialize history
+if "history" not in st.session_state:
+    st.session_state.history = pd.DataFrame(columns=["time", "ce_change", "pe_change", "price"])
 
 ph = st.empty()
+
 while True:
     with ph.container():
-        data = get_data()
+        data = fetch_data()
         if not data:
-            st.warning("Waiting for NSE data...")
-            time.sleep(refresh)
+            st.info("Waiting for market data...")
+            time.sleep(refresh_sec)
             continue
-            
-        # Save history
+
+        # Append to history
         new_row = pd.DataFrame([{
             "time": data["time"],
-            "ce_ch": data["ce_ch"],
-            "pe_ch": data["pe_ch"],
+            "ce_change": data["ce_change"],
+            "pe_change": data["pe_change"],
             "price": data["price"]
         }])
-        st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
-        st.session_state.df = st.session_state.df.tail(100)
-        df = st.session_state.df
+        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+        st.session_state.history = st.session_state.history.tail(120)  # Last 2 hours approx
+        df = st.session_state.history
 
-        # Metrics
+        # Header Info
+        st.markdown(f"### {index} • ₹{data['price']:,} • NSE Time: {data['time']} • Expiry: {expiry}")
+
+        # Metrics Row
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            st.metric("CE OI", f"{data['ce_oi']}L")
+            st.metric("**CE OI**", f"{data['ce_oi']}L")
         with c2:
-            st.metric("PE OI", f"{data['pe_oi']}L")
+            st.metric("**PE OI**", f"{data['pe_oi']}L")
         with c3:
-            st.metric("CE Change", f"{data['ce_ch']:+.1f}L")
+            st.metric("**CE Change**", f"{data['ce_change']:+.1f}L")
         with c4:
-            st.metric("PE Change", f"{data['pe_ch']:+.1f}L")
+            st.metric("**PE Change**", f"{data['pe_change']:+.1f}L")
         with c5:
-            st.metric("PCR", data["pcr"])
+            st.metric("**PCR**", data["pcr"])
 
-        # TradingTick Exact Chart
+        # TRADINGTICK EXACT DUAL-AXIS LINE CHART
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["time"], y=df["ce_ch"], name="CE", mode="lines+markers", line=dict(color="#28a745", width=3)))
-        fig.add_trace(go.Scatter(x=df["time"], y=df["pe_ch"], name="PE", mode="lines+markers", line=dict(color="#dc3545", width=3)))
-        fig.add_trace(go.Scatter(x=df["time"], y=df["price"], name="Future Price", yaxis="y2", line=dict(color="#ffc107", width=3)))
+
+        # CE Change (Green Line)
+        fig.add_trace(go.Scatter(
+            x=df["time"], y=df["ce_change"],
+            mode='lines+markers',
+            name='CE Change',
+            line=dict(color='#28a745', width=3),
+            marker=dict(size=6)
+        ))
+
+        # PE Change (Red Line)
+        fig.add_trace(go.Scatter(
+            x=df["time"], y=df["pe_change"],
+            mode='lines+markers',
+            name='PE Change',
+            line=dict(color='#dc3545', width=3),
+            marker=dict(size=6)
+        ))
+
+        # Future Price (Yellow Line - Right Axis)
+        fig.add_trace(go.Scatter(
+            x=df["time"], y=df["price"],
+            mode='lines',
+            name='Future Price',
+            yaxis="y2",
+            line=dict(color='#ffc107', width=4)
+        ))
 
         fig.update_layout(
-            height=500,
+            height=550,
             plot_bgcolor="white",
             paper_bgcolor="white",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            xaxis=dict(title="Time", tickangle=45),
-            yaxis=dict(title="Change in OI (Lakhs)", side="left"),
-            yaxis2=dict(title="Future Price", overlaying="y", side="right")
+            xaxis=dict(title="Time", tickangle=45, gridcolor="#e0e0e0"),
+            yaxis=dict(title="Change in OI (Lakhs)", gridcolor="#e0e0e0", side="left"),
+            yaxis2=dict(title="Future Price", overlaying="y", side="right", showgrid=False),
+            hovermode="x unified",
+            margin=dict(l=50, r=50, t=50, b=50)
         )
+
         st.plotly_chart(fig, use_container_width=True)
 
-        st.caption(f"As of {data['time']} • Expiry: {expiry} • NSE Official Data • Made by Amit Bhai")
+        st.caption(f"• Last Updated: {data['time']} • 100% NSE Official • Made with ❤️ by Amit Bhai")
 
-    time.sleep(refresh)
+    time.sleep(refresh_sec)
