@@ -28,28 +28,22 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Controls
-col1, col2, col3 = st.columns([2, 2, 1])
-with col1:
-    index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
-with col2:
-    expiry_type = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"])
-with col3:
-    st.markdown("<br><div class='live'>LIVE</div>", unsafe_allow_html=True)
-
+# Controls (bahar rakhe — no duplicate)
+index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
+expiry_type = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"])
 refresh = st.slider("Refresh (sec)", 5, 20, 8)
+
+col_live = st.columns([7,1])[1]
+with col_live:
+    st.markdown("<br><div class='live'>LIVE</div>", unsafe_allow_html=True)
 
 # Session
 @st.cache_resource(ttl=1800)
 def get_session():
     s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.nseindia.com/option-chain"
-    })
+    s.headers.update({"User-Agent": "Mozilla/5.0", "Referer": "https://www.nseindia.com/option-chain"})
     s.get("https://www.nseindia.com")
     return s
-
 session = get_session()
 
 # History
@@ -59,13 +53,14 @@ if os.path.exists(HISTORY_FILE):
 else:
     df_history = pd.DataFrame(columns=["timestamp","index","expiry","price","ce_oi","pe_oi","ce_ch","pe_ch","net_diff"])
 
-# Format function
+# Format OI
 def format_oi(val):
     if abs(val) >= 100:
         return f"{val/100:.2f} Cr"
     else:
         return f"{val:.1f} L"
 
+# Main loop
 placeholder = st.empty()
 
 while True:
@@ -75,7 +70,6 @@ while True:
             data = session.get(url, timeout=15).json()["records"]
             price = data["underlyingValue"]
             ts = datetime.strptime(data["timestamp"], "%d-%b-%Y %H:%M:%S")
-            time_str = ts.strftime("%H:%M")
 
             expiries = data["expiryDates"]
             target = expiries[0] if expiry_type == "Current Week" else expiries[1] if "Next Week" in expiry_type and len(expiries)>1 else expiries[-1]
@@ -103,13 +97,12 @@ while True:
             }])
             df_history = pd.concat([df_history, new_row], ignore_index=True)
             df_history.to_csv(HISTORY_FILE, index=False)
-
-            st.success(f"Live • {index} • ₹{price:,.0f} • {time_str}")
+            status = "success"
 
         except:
             mask = (df_history["index"] == index) & (df_history["expiry"] == expiry_type)
             if df_history[mask].empty:
-                st.info("Waiting for market open...")
+                st.info("Waiting for market data...")
                 time.sleep(refresh)
                 continue
             last = df_history[mask].iloc[-1]
@@ -117,56 +110,63 @@ while True:
             ce_lakh = last["ce_oi"]
             pe_lakh = last["pe_oi"]
             net_diff = last["net_diff"]
-            time_str = pd.to_datetime(last["timestamp"]).strftime("%H:%M")
-            st.warning("Market Closed • Showing Last Data")
+            status = "warning"
 
-        # Filter chart data
+        # Chart data
         mask = (df_history["index"] == index) & (df_history["expiry"] == expiry_type)
         chart_df = df_history[mask].tail(100).copy()
         chart_df["time"] = pd.to_datetime(chart_df["timestamp"]).dt.strftime("%H:%M")
 
-        # Layout: 30% Left (Bar) | 70% Right (Line Chart)
-        left, right = st.columns([3, 7])
+        # Unique key using timestamp
+        unique_key = f"update_{int(time.time())}"
 
-        with left:
-            st.markdown("#### Open Interest (CE vs PE)")
+        # Layout 30:70
+        left_col, right_col = st.columns([3, 7])
+
+        with left_col:
+            st.markdown("#### Open Interest")
             fig_bar = go.Figure()
             fig_bar.add_trace(go.Bar(y=["OI"], x=[ce_lakh], name="CE", marker_color="#28a745",
                                    text=format_oi(ce_lakh), textposition="outside"))
             fig_bar.add_trace(go.Bar(y=["OI"], x=[-pe_lakh], name="PE", marker_color="#e74c3c",
                                    text=format_oi(pe_lakh), textposition="outside"))
-            fig_bar.update_layout(height=500, barmode="relative", showlegend=False,
-                                yaxis=dict(showticklabels=False), margin=dict(t=40))
-            st.plotly_chart(fig_bar, use_container_width=True)
+            fig_bar.update_layout(height=480, barmode="relative", showlegend=False,
+                                yaxis=dict(showticklabels=False), margin=dict(t=30))
+            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{unique_key}")
 
             st.metric("CE OI", format_oi(ce_lakh))
             st.metric("PE OI", format_oi(pe_lakh))
 
-        with right:
-            st.markdown("#### CE/PE Change + Net Difference + Future Price")
-            fig = go.Figure()
+        with right_col:
+            st.markdown("#### CE/PE Change • Net Difference • Future Price")
+            fig_line = go.Figure()
+            fig_line.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["ce_ch"], name="CE Change",
+                                        line=dict(color="#28a745", width=4)))
+            fig_line.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["pe_ch"], name="PE Change",
+                                        line=dict(color="#e74c3c", width=4)))
+            fig_line.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["net_diff"], name="Net (CE-PE)",
+                                        line=dict(color="#4361ee", width=5)))
+            fig_line.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["price"], name="Future Price",
+                                        yaxis="y2", line=dict(color="#ffc107", width=4, dash="dot")))
 
-            fig.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["ce_ch"], name="CE Change",
-                                   line=dict(color="#28a745", width=4)))
-            fig.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["pe_ch"], name="PE Change",
-                                   line=dict(color="#e74c3c", width=4)))
-            fig.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["net_diff"], name="Net (CE-PE)",
-                                   line=dict(color="#4361ee", width=5)))
-            fig.add_trace(go.Scatter(x=chart_df["time"], y=chart_df["price"], name="Future Price", yaxis="y2",
-                                   line=dict(color="#ffc107", width=4, dash="dot")))
-
-            fig.update_layout(
-                height=500,
+            fig_line.update_layout(
+                height=480,
                 legend=dict(orientation="h", y=1.02, x=1),
                 xaxis_tickangle=45,
                 yaxis=dict(title="Change in OI (Lakhs)"),
                 yaxis2=dict(title="Price (₹)", overlaying="y", side="right", showgrid=False),
                 hovermode="x unified"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig_line, use_container_width=True, key=f"line_{unique_key}")
+
+        # Net Change
+        if status == "success":
+            st.success(f"Live • {index} • ₹{price:,.0f}")
+        else:
+            st.warning(f"Market Closed • Last: ₹{price:,.0f}")
 
         st.metric("Net CE-PE Change", f"{net_diff:+.1f}L", delta=f"{net_diff:+.1f}L")
 
-        st.caption("Made with passion by Amit Bhai • 100% NSE Live • Auto Cr/L • Data Saved Forever")
+        st.caption("Made by Amit Bhai • 100% NSE Live • Auto Cr/L Format • Data Saved Permanently")
 
     time.sleep(refresh)
