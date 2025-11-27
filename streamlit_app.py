@@ -6,54 +6,48 @@ from datetime import datetime
 import time
 import os
 
-st.set_page_config(page_title="Amit Pro OI Terminal", layout="wide", page_icon="Chart increasing")
+st.set_page_config(page_title="Amit Pro OI Terminal", layout="wide")
 
-# Light Clean Theme + Logo Header
+# Clean Professional Theme
 st.markdown("""
 <style>
     .stApp { background: #f8f9fa; }
-    .header-bar {
-        background: linear-gradient(90deg, #007bff, #00d4ff);
-        padding: 12px 20px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 1.8rem;
+    .header { 
+        background: linear-gradient(90deg, #007bff, #00c3ff); 
+        padding: 15px 25px; 
+        border-radius: 0 15px 15px 0; 
+        display: flex; 
+        align-items: center; 
+        color: white; 
+        font-size: 1.8rem; 
         font-weight: bold;
-        box-shadow: 0 4px 15px rgba(0,123,255,0.3);
-        margin-bottom: 20px;
+        width: fit-content;
     }
     .logo { height: 50px; margin-right: 15px; border-radius: 10px; }
-    .stMetric label { color: #007bff !important; font-weight: bold; }
-    .stMetric > div > div { font-size: 1.8rem !important; font-weight: bold; }
-    .live { color: #dc3545; font-size: 2rem; animation: pulse 1.8s infinite; }
-    @keyframes pulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+    .live { color: #e74c3c; font-weight: bold; font-size: 1.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# Header with Logo
+# Header - Top Left
 st.markdown("""
-<div class="header-bar">
+<div class="header">
     <img src="https://i.imgur.com/7Y5X2hX.png" class="logo">
     AMIT'S PRO OI TERMINAL
 </div>
 """, unsafe_allow_html=True)
 
 # Controls
-col1, col2, col3 = st.columns([2,2,1])
+col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
     index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
 with col2:
     expiry_type = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"])
 with col3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="live">LIVE</div>', unsafe_allow_html=True)
+    st.markdown("<br><div class='live'>● LIVE</div>", unsafe_allow_html=True)
 
-refresh = st.slider("Refresh (sec)", 5, 20, 7)
+refresh = st.slider("Refresh (sec)", 5, 30, 8)
 
-# Session
+# Session & History
 @st.cache_resource(ttl=3600)
 def get_session():
     s = requests.Session()
@@ -62,32 +56,26 @@ def get_session():
     return s
 session = get_session()
 
-# Load/Save History
 HISTORY_FILE = "oi_history.csv"
 if os.path.exists(HISTORY_FILE):
     history_df = pd.read_csv(HISTORY_FILE)
 else:
-    history_df = pd.DataFrame(columns=["timestamp", "index", "expiry", "price", "ce_oi", "pe_oi", "ce_change", "pe_change", "pcr"])
+    history_df = pd.DataFrame()
 
-def fetch_filtered_oi():
+def fetch_data():
     try:
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={index}"
         data = session.get(url, timeout=12).json()["records"]
-        
         price = data["underlyingValue"]
-        timestamp = data["timestamp"]
-        nse_time = datetime.strptime(timestamp, "%d-%b-%Y %H:%M:%S")
-        time_str = nse_time.strftime("%H:%M")
-        date_str = nse_time.strftime("%d-%b-%Y")
+        timestamp = datetime.strptime(data["timestamp"], "%d-%b-%Y %H:%M:%S")
+        time_str = timestamp.strftime("%H:%M")
 
-        # Get expiry dates
         expiries = [e["expiryDate"] for e in data["expiryDates"]]
-        target_expiry = expiries[0] if expiry_type == "Current Week" else expiries[1] if len(expiries)>1 else expiries[0]
-        if expiry_type == "Monthly": target_expiry = expiries[-1]
+        target = expiries[0] if expiry_type == "Current Week" else expiries[1] if "Next Week" in expiry_type else expiries[-1]
 
         ce_oi = pe_oi = ce_ch = pe_ch = 0
         for item in data["data"]:
-            if item.get("expiryDate") == target_expiry:
+            if item.get("expiryDate") == target:
                 if "CE" in item:
                     ce_oi += item["CE"]["openInterest"]
                     ce_ch += item["CE"]["changeinOpenInterest"]
@@ -96,87 +84,78 @@ def fetch_filtered_oi():
                     pe_ch += item["PE"]["changeinOpenInterest"]
 
         lot = 25 if index == "NIFTY" else 15 if index == "BANKNIFTY" else 25
-        pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
+        net_diff = (ce_ch - pe_ch) * lot / 100000
 
         result = {
-            "timestamp": nse_time,
             "time": time_str,
             "price": round(price, 2),
             "ce_oi": round(ce_oi * lot / 100000, 1),
             "pe_oi": round(pe_oi * lot / 100000, 1),
             "ce_change": round(ce_ch * lot / 100000, 1),
             "pe_change": round(pe_ch * lot / 100000, 1),
-            "pcr": pcr,
-            "expiry": expiry_type
+            "net_diff": round(net_diff, 1),
+            "timestamp": timestamp
         }
 
-        # Save to history
-        new_row = pd.DataFrame([{**result, "index": index}])
+        # Save
+        new_row = pd.DataFrame([{**result, "index": index, "expiry": expiry_type}])
         global history_df
         history_df = pd.concat([history_df, new_row], ignore_index=True)
         history_df.to_csv(HISTORY_FILE, index=False)
-
         return result
     except:
         return None
 
-# Main Loop
+# Main Layout
+left_col, right_col = st.columns([30, 70])
+
 ph = st.empty()
 while True:
     with ph.container():
-        data = fetch_filtered_oi()
+        data = fetch_data()
         if not data:
-            st.warning("Market Closed or Loading...")
+            st.info("Market Closed / Loading History...")
             time.sleep(refresh)
             continue
 
-        # Filter history for current index + expiry
+        # Filter history
         mask = (history_df["index"] == index) & (history_df["expiry"] == expiry_type)
-        chart_df = history_df[mask].tail(80).copy()
-        chart_df["time"] = pd.to_datetime(chart_df["timestamp"]).dt.strftime("%H:%M")
+        df = history_df[mask].tail(100).copy()
+        df["time"] = pd.to_datetime(df["timestamp"]).dt.strftime("%H:%M")
 
-        # Header Info
-        st.markdown(f"### {index} • ₹{data['price']:,} • Time: {data['time']} • Expiry: {expiry_type}")
+        # LEFT: OI Bar Chart
+        with left_col:
+            st.markdown("#### OI (Lakhs)")
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(y=["CE"], x=[data["ce_oi"]], name="CE OI", marker_color="#28a745", text=[data["ce_oi"]], textposition="outside"))
+            fig_bar.add_trace(go.Bar(y=["PE"], x=[-data["pe_oi"]], name="PE OI", marker_color="#e74c3c", text=[data["pe_oi"]], textposition="outside"))
+            fig_bar.update_layout(height=300, barmode="relative", showlegend=False, yaxis=dict(showticklabels=False))
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Metrics
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("CE OI", f"{data['ce_oi']}L")
-        c2.metric("PE OI", f"{data['pe_oi']}L")
-        c3.metric("CE Change", f"{data['ce_change']:+.1f}L")
-        c4.metric("PE Change", f"{data['pe_change']:+.1f}L")
-        c5.metric("PCR", data["pcr"])
+            # Current Values
+            st.metric("CE OI", f"{data['ce_oi']}L")
+            st.metric("PE OI", f"{data['pe_oi']}L")
+            st.metric("Net Change", f"{data['net_diff']:+.1f}L")
 
-        # BAR CHART WITH VALUES ON BARS (TradingTick Style)
-        fig = go.Figure()
+        # RIGHT: Multi-Line Dual Axis Chart
+        with right_col:
+            st.markdown(f"#### {index} • ₹{data['price']:,} • {data['time']} • {expiry_type}")
+            fig = go.Figure()
 
-        fig.add_trace(go.Bar(
-            x=chart_df["time"], y=chart_df["ce_oi"],
-            name="CE OI", marker_color="#28a745",
-            text=chart_df["ce_oi"], textposition="outside"
-        ))
-        fig.add_trace(go.Bar(
-            x=chart_df["time"], y=chart_df["pe_oi"]*-1,
-            name="PE OI", marker_color="#dc3545",
-            text=chart_df["pe_oi"].abs(), textposition="outside"
-        ))
-        fig.add_trace(go.Scatter(
-            x=chart_df["time"], y=chart_df["price"],
-            name="Future Price", yaxis="y2",
-            line=dict(color="#ffc107", width=4)
-        ))
+            fig.add_trace(go.Scatter(x=df["time"], y=df["ce_change"], mode="lines+markers", name="CE Change", line=dict(color="#28a745", width=3)))
+            fig.add_trace(go.Scatter(x=df["time"], y=df["pe_change"], mode="lines+markers", name="PE Change", line=dict(color="#e74c3c", width=3)))
+            fig.add_trace(go.Scatter(x=df["time"], y=df["net_diff"], mode="lines+markers", name="CE-PE Diff", line=dict(color="#4361ee", width=4)))
+            fig.add_trace(go.ScFut(x=df["time"], y=df["price"], name="Future Price", yaxis="y2", line=dict(color="#ffc107", width=4, dash="dot")))
 
-        fig.update_layout(
-            height=550,
-            barmode="relative",
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            legend=dict(orientation="h", y=1.02, x=1),
-            yaxis=dict(title="Open Interest (Lakhs)"),
-            yaxis2=dict(title="Price", overlaying="y", side="right", showgrid=False),
-            xaxis_tickangle=45
-        )
+            fig.update_layout(
+                height=600,
+                legend=dict(orientation="h", y=1.02, x=1),
+                xaxis_tickangle=45,
+                yaxis=dict(title="Change in OI (Lakhs)"),
+                yaxis2=dict(title="Price", overlaying="y", side="right", showgrid=False)
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"Data saved permanently • Last updated: {data['time']} • Made by Amit Bhai")
+        st.caption("Data saved permanently • 100% NSE Official • Made by Amit Bhai")
 
     time.sleep(refresh)
