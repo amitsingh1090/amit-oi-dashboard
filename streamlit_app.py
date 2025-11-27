@@ -8,7 +8,7 @@ import os
 
 st.set_page_config(page_title="Amit Pro OI Terminal", layout="wide")
 
-# Header + Logo (Fixed)
+# Header + Logo
 st.markdown("""
 <style>
     .stApp { background: #f8f9fa; }
@@ -38,16 +38,16 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Controls (outside loop — fixed duplicate error)
-index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"], key="idx")
-expiry_type = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"], key="exp")
-refresh = st.slider("Refresh (sec)", 5, 20, 7, key="ref")
+# Controls (outside loop — no duplicate)
+index = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
+expiry_type = st.selectbox("Expiry", ["Current Week", "Next Week", "Monthly"])
+refresh = st.slider("Refresh (sec)", 5, 20, 7)
 
-c1, c2, c3 = st.columns([2, 2, 1])
+c1, c2, c3 = st.columns([3, 3, 1])
 with c3:
     st.markdown("<br><div class='live'>LIVE</div>", unsafe_allow_html=True)
 
-# NSE Session
+# Session
 @st.cache_resource(ttl=1800)
 def get_session():
     s = requests.Session()
@@ -56,19 +56,19 @@ def get_session():
         "Referer": "https://www.nseindia.com/option-chain",
         "X-Requested-With": "XMLHttpRequest"
     })
-    s.get("https://www.nseindia.com")
+    s.get("https://www.nseindia.com", timeout=10)
     return s
 
 session = get_session()
 
-# History
+# History File (outside loop)
 HISTORY_FILE = "oi_history.csv"
 if os.path.exists(HISTORY_FILE):
     history_df = pd.read_csv(HISTORY_FILE)
 else:
-    history_df = pd.DataFrame()
+    history_df = pd.DataFrame(columns=["timestamp", "index", "expiry", "price", "ce_oi", "pe_oi", "ce_change", "pe_change", "net_diff"])
 
-# Placeholder for live update (only one container!)
+# Placeholder
 placeholder = st.empty()
 
 while True:
@@ -95,56 +95,47 @@ while True:
                         pe_oi += item["PE"]["openInterest"]
                         pe_ch += item["PE"]["changeinOpenInterest"]
 
-            lot = 25 if index == "NIFTY" else 15
+            lot = 25 if index == "NIFTY" else 15 if index == "BANKNIFTY" else 25
+
             current = {
+                "timestamp": ts,
                 "time": time_str,
                 "price": round(price, 2),
                 "ce_oi": round(ce_oi * lot / 100000, 1),
                 "pe_oi": round(pe_oi * lot / 100000, 1),
                 "ce_change": round(ce_ch * lot / 100000, 1),
                 "pe_change": round(pe_ch * lot / 100000, 1),
-                "net_diff": round((ce_ch - pe_ch) * lot / 100000, 1),
-                "timestamp": ts
+                "net_diff": round((ce_ch - pe_ch) * lot / 100000, 1)
             }
 
-            # Save
+            # Save to history (no global keyword needed)
             new_row = pd.DataFrame([{**current, "index": index, "expiry": expiry_type}])
-            global history_df
             history_df = pd.concat([history_df, new_row], ignore_index=True)
             history_df.to_csv(HISTORY_FILE, index=False)
 
-            status = "success"
-            msg = f"Live • {index} • ₹{current['price']:,} • {current['time']}"
+            st.success(f"Live • {index} • ₹{current['price']:,} • {current['time']}")
 
-        except:
-            # Market closed — use last saved
+        except Exception as e:
+            # Market closed — use last data
             mask = (history_df["index"] == index) & (history_df["expiry"] == expiry_type)
-            df_hist = history_df[mask]
-            if df_hist.empty:
-                st.warning("No data yet. Waiting for market open...")
+            filtered = history_df[mask]
+            if filtered.empty:
+                st.warning("Waiting for first data...")
                 time.sleep(refresh)
                 continue
-            current = df_hist.iloc[-1].to_dict()
+            current = filtered.iloc[-1].to_dict()
             current["time"] = pd.to_datetime(current["timestamp"]).strftime("%H:%M")
-            status = "warning"
-            msg = "Market Closed • Showing Last Data"
+            st.warning("Market Closed • Showing Last Data")
 
-        # Filter chart data
+        # Chart data
         mask = (history_df["index"] == index) & (history_df["expiry"] == expiry_type)
         chart_df = history_df[mask].tail(100).copy()
-        if not chart_df.empty:
-            chart_df["time"] = pd.to_datetime(chart_df["timestamp"]).dt.strftime("%H:%M")
+        chart_df["time"] = pd.to_datetime(chart_df["timestamp"]).dt.strftime("%H:%M")
 
-        # Status
-        if status == "success":
-            st.success(msg)
-        else:
-            st.warning(msg)
+        # Layout
+        left, right = st.columns([3, 7])
 
-        # Layout 30:70
-        col_left, col_right = st.columns([3, 7])
-
-        with col_left:
+        with left:
             st.markdown("#### OI (Lakhs)")
             fig_bar = go.Figure()
             fig_bar.add_trace(go.Bar(y=["CE"], x=[current["ce_oi"]], marker_color="#28a745",
@@ -152,14 +143,14 @@ while True:
             fig_bar.add_trace(go.Bar(y=["PE"], x=[-current["pe_oi"]], marker_color="#e74c3c",
                                    text=[current["pe_oi"]], textposition="outside"))
             fig_bar.update_layout(height=380, barmode="relative", showlegend=False,
-                                yaxis=dict(showticklabels=False), margin=dict(t=10))
-            st.plotly_chart(fig_bar, use_container_width=True, key="bar_chart")
+                                yaxis=dict(showticklabels=False), margin=dict(t=20))
+            st.plotly_chart(fig_bar, use_container_width=True, key="oi_bar")
 
             st.metric("CE OI", f"{current['ce_oi']}L")
             st.metric("PE OI", f"{current['pe_oi']}L")
             st.metric("Net Diff", f"{current['net_diff']:+}L")
 
-        with col_right:
+        with right:
             st.markdown(f"#### Change in OI + Price • {expiry_type}")
             fig = go.Figure()
             if not chart_df.empty:
@@ -174,8 +165,8 @@ while True:
             fig.update_layout(height=580, legend=dict(orientation="h", y=1.02, x=1),
                             yaxis=dict(title="Change in OI (Lakhs)"),
                             yaxis2=dict(title="Price", overlaying="y", side="right"))
-            st.plotly_chart(fig, use_container_width=True, key="line_chart")
+            st.plotly_chart(fig, use_container_width=True, key="main_chart")
 
-        st.caption("Made with ❤️ by Amit Bhai • 100% NSE Official Data")
+        st.caption("Made with love by Amit Bhai • 100% NSE Official • Data Saved Permanently")
 
     time.sleep(refresh)
