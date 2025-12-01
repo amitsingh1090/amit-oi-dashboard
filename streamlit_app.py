@@ -55,6 +55,7 @@ def get_session():
     return s
 session = get_session()
 
+# History File (No global needed — already in scope)
 HISTORY_FILE = "oi_history.csv"
 if os.path.exists(HISTORY_FILE):
     df_history = pd.read_csv(HISTORY_FILE)
@@ -73,7 +74,7 @@ def get_oi_data(symbol):
         data = session.get(url, timeout=12).json()["records"]
         price = data["underlyingValue"]
         expiries = data["expiryDates"]
-        target = expiries[0]  # Current week
+        target = expiries[0]
 
         ce_oi = pe_oi = ce_ch = pe_ch = 0
         for item in data["data"]:
@@ -96,12 +97,12 @@ def get_oi_data(symbol):
     except:
         return None
 
-# Main Dashboard Loop
+# Main Loop
 placeholder = st.empty()
 
 while True:
     with placeholder.container():
-        # === TAB 1: Single Index Dashboard ===
+        # === TAB 1: Single Index ===
         with tab1:
             try:
                 url = f"https://www.nseindia.com/api/option-chain-indices?symbol={index}"
@@ -127,7 +128,7 @@ while True:
                 pe_lakh = round(pe_oi * lot / 100000, 1)
                 net_change = round((ce_ch - pe_ch) * lot / 100000, 1)
 
-                # Save
+                # Save data (NO GLOBAL KEYWORD NEEDED)
                 new_row = pd.DataFrame([{
                     "timestamp": ts, "index": index, "expiry": expiry_type,
                     "price": price, "ce_oi": ce_lakh, "pe_oi": pe_lakh,
@@ -135,7 +136,6 @@ while True:
                     "pe_ch": round(pe_ch * lot / 100000, 1),
                     "net_diff": net_change
                 }])
-                global df_history
                 df_history = pd.concat([df_history, new_row], ignore_index=True)
                 df_history.to_csv(HISTORY_FILE, index=False)
 
@@ -144,7 +144,7 @@ while True:
                 live = False
                 mask = (df_history["index"] == index) & (df_history["expiry"] == expiry_type)
                 if df_history[mask].empty:
-                    st.info("No data yet...")
+                    st.info("Waiting for data...")
                     time.sleep(refresh)
                     continue
                 row = df_history[mask].iloc[-1]
@@ -153,11 +153,9 @@ while True:
                 pe_lakh = row["pe_oi"]
                 net_change = row["net_diff"]
 
-            # Chart Data
             chart_df = df_history[(df_history["index"] == index) & (df_history["expiry"] == expiry_type)].tail(80).copy()
             chart_df["time"] = pd.to_datetime(chart_df["timestamp"]).dt.strftime("%H:%M")
 
-            # Layout
             l, r = st.columns([3.5, 6.5])
 
             with l:
@@ -188,7 +186,7 @@ while True:
 
             st.success(f"{'LIVE' if live else 'LAST'} • {index} • ₹{price:,.0f} • Net Change: {net_change:+.1f}L")
 
-        # === TAB 2: All Indices Summary ===
+        # === TAB 2: All Indices ===
         with tab2:
             indices = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
             rows = []
@@ -206,9 +204,7 @@ while True:
             if rows:
                 summary_df = pd.DataFrame(rows)
                 st.dataframe(summary_df.style.highlight_max(axis=0, color='#ffeb3b'), use_container_width=True)
-                if refresh_all:
-                    st.autorefresh(interval=15000, key="all_refresh")
 
-        st.caption("Made by Amit Bhai • 100% NSE Live • All Data Saved • Works 24x7")
+        st.caption("Made by Amit Bhai • 100% NSE Live • Data Saved Forever • Works 24x7")
 
     time.sleep(refresh)
